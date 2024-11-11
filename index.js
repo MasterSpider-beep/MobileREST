@@ -37,6 +37,29 @@ app.use(async (ctx, next) => {
     }
 });
 
+const clientMap = new Map();
+wss.on('connection', (ws) => {
+    let authenticated = false;
+
+    ws.on('message', (message) => {
+        try {
+            const data = JSON.parse(message);
+            if (data.type === 'authenticate' && data.token) {
+                const token = data.token;
+                const username = jwt.decode(token).username;
+                clientMap.set(username, ws);
+                authenticated = true;
+            }
+        } catch (error) {
+            console.error('Invalid message format:', message);
+        }
+    });
+    ws.on('close', () => {
+        clientMap.forEach((value, key) => {
+            if (value === ws) clientMap.delete(key);
+        });
+    });
+});
 const broadcast = data =>
     wss.clients.forEach(client => {
         if (client.readyState === WebSocket.OPEN) {
@@ -44,14 +67,22 @@ const broadcast = data =>
         }
     });
 
+const broadcastToUser = (data, username) =>{
+    const client = clientMap.get(username);
+    if(client && client.readyState === WebSocket.OPEN){
+        client.send(JSON.stringify(data));
+    }
+}
+
 class Book {
-    constructor({id, title, author, releaseDate, quantity, isRentable}) {
+    constructor({id, title, author, releaseDate, quantity, isRentable, owner}) {
         this.id = id;
         this.title = title;
         this.author = author;
         this.releaseDate = releaseDate;
         this.quantity = quantity;
         this.isRentable = isRentable;
+        this.owner = owner
     }
 }
 
@@ -60,7 +91,7 @@ const authenticateToken = async (ctx, next) => {
 
     if (!token) {
         ctx.response.status = 401;
-        ctx.response.body = { message: 'Token required' };
+        ctx.response.body = {message: 'Token required'};
         return;
     }
 
@@ -69,16 +100,16 @@ const authenticateToken = async (ctx, next) => {
         const username = user.username;
         const statement = db.prepare('SELECT loggedOut FROM Users WHERE username = ?');
         const loggedOut = statement.get(username).loggedOut;
-        if(loggedOut === 0) {
+        if (loggedOut === 0) {
             ctx.state.user = user;
             return next();
-        }else{
+        } else {
             ctx.response.status = 401;
-            ctx.response.body = { message: 'Token is blacklisted' };
+            ctx.response.body = {message: 'Token is blacklisted'};
         }
     } catch (err) {
         ctx.response.status = 403;
-        ctx.response.body = { message: 'Invalid or expired token' };
+        ctx.response.body = {message: 'Invalid or expired token'};
     }
 };
 router.get('/books', authenticateToken, ctx => {
@@ -87,20 +118,24 @@ router.get('/books', authenticateToken, ctx => {
     const title = ctx.query.title;
     const titleSearch = `%${title}%`
     const offset = (page - 1) * limit;
-    const statement = db.prepare('SELECT * FROM Books WHERE title LIKE ? LIMIT ? OFFSET ?');
-    const books = statement.all(titleSearch, limit, offset);
+    const token = ctx.request.headers['authorization'];
+    const username = jwt.decode(token).username;
+    const statement = db.prepare('SELECT * FROM Books WHERE title LIKE ? AND (owner = ? or owner is null) LIMIT ? OFFSET ?');
+    const books = statement.all(titleSearch, username, limit, offset);
     ctx.response.body = books;
 });
 
 router.get('/books/:id', authenticateToken, async (ctx) => {
+    const token = ctx.request.headers['authorization'];
+    const username = jwt.decode(token).username;
     const bookId = parseInt(ctx.request.ctx.params.id);
-    const statement = db.prepare('SELECT * FROM Books WHERE id = ?');
-    const book = statement.get(bookId);
-    if (book) {
+    const statement = db.prepare('SELECT * FROM Books WHERE id = ? AND (owner = ? or owner is null)');
+    const book = statement.get(bookId, username);
+    if (book && (book.owner === username || book.owner === null)) {
         ctx.response.body = book;
     } else {
         ctx.response.status(404);
-        ctx.response.body = {error: 'Book doesn\'t exist'};
+        ctx.response.body = {error: 'Book doesn\'t exist for this user'};
     }
 });
 
@@ -108,26 +143,30 @@ router.post('/books', authenticateToken, async (ctx) => {
     const {title, author, releaseDate, quantity, isRentable} = ctx.request.body;
     let id;
     const isRentableInt = isRentable ? 1 : 0;
+    const token = ctx.request.headers['authorization'];
+    const username = jwt.decode(token).username;
     try {
-        const statement = db.prepare('INSERT INTO Books(title, author, releaseDate, quantity, isRentable) ' +
-            'VALUES (?, ?, ?, ?, ?)');
-        const info = statement.run(title, author, releaseDate, quantity, isRentableInt);
+        const statement = db.prepare('INSERT INTO Books(title, author, releaseDate, quantity, isRentable, owner) ' +
+            'VALUES (?, ?, ?, ?, ?, ?)');
+        const info = statement.run(title, author, releaseDate, quantity, isRentableInt, username);
         id = info.lastInsertRowid;
     } catch (error) {
         ctx.response.body = {message: 'Data is missing!'};
         ctx.response.status = 400 //BAD REQUEST;
     }
-    const book = new Book({id, title, author, releaseDate, quantity, isRentable})
+    const book = new Book({id, title, author, releaseDate, quantity, isRentable, username})
     ctx.status = 201; //Created
     ctx.response.body = book;
-    broadcast({event: 'created', payload: book});
+    broadcastToUser({event: 'created', payload: book}, username);
 });
 
 router.put('/books', authenticateToken, async (ctx) => {
     const newBook = ctx.request.body;
     const id = newBook.id;
-    const statement = db.prepare('UPDATE Books SET title = ?, releaseDate = ?, quantity = ?, isRentable = ?, author = ? WHERE id = ?');
-    const info = statement.run(newBook.title, newBook.releaseDate, newBook.quantity, newBook.isRentable, newBook.author, newBook.id);
+    const token = ctx.request.headers['authorization'];
+    const username = jwt.decode(token).username;
+    const statement = db.prepare('UPDATE Books SET title = ?, releaseDate = ?, quantity = ?, isRentable = ?, author = ? WHERE id = ? and (owner = ? or owner is null)');
+    const info = statement.run(newBook.title, newBook.releaseDate, newBook.quantity, newBook.isRentable, newBook.author, newBook.id, username);
     if (info.changes > 0) {
         ctx.response.body = newBook;
         ctx.response.status = 200; //OK
@@ -135,13 +174,21 @@ router.put('/books', authenticateToken, async (ctx) => {
         ctx.response.status = 400; //BAD REQUEST
         ctx.response.body = {error: 'Book doesn\'t exist'};
     }
-    broadcast({event: 'updated', payload: newBook});
+    const stat = db.prepare('SELECT * FROM Books WHERE id = ?');
+    const book = stat.get(id);
+    if(book.owner === null){
+        broadcast({event: 'updated', payload: newBook});
+    }else {
+        broadcastToUser({event: 'updated', payload: newBook},username);
+    }
 });
 
 router.delete('/books/:id', authenticateToken, ctx => {
     const id = parseInt(ctx.request.ctx.params.id);
-    const statement = db.prepare('DELETE FROM Books WHERE id = ?');
-    const info = statement.run(id);
+    const token = ctx.request.headers['authorization'];
+    const username = jwt.decode(token).username;
+    const statement = db.prepare('DELETE FROM Books WHERE id = ? AND (owner = ? or owner is null)');
+    const info = statement.run(id, username);
     if (info.changes > 0) {
         ctx.response.status = 204; //NO CONTENT
         broadcast({event: 'deleted', payload: {id}});
@@ -155,23 +202,37 @@ router.post('/login', ctx => {
     const {username, password} = ctx.request.body;
     const statement = db.prepare('SELECT 1 FROM Users WHERE username = ? and password = ?');
     const rez = statement.get(username, password);
-    if(rez){
-        const payload = { username };
-        const token = jwt.sign(payload, JWT_SECRET, { expiresIn: '1d' });
+    if (rez) {
+        const payload = {username};
+        const token = jwt.sign(payload, JWT_SECRET, {expiresIn: '1d'});
         const statement2 = db.prepare('UPDATE Users SET loggedOut=false WHERE username= ?');
         const info2 = statement2.run(username);
         ctx.response.status = 200;//OK
-        ctx.response.body = {token:token};
-    }else
-    {
+        ctx.response.body = {token: token};
+    } else {
         ctx.response.status = 401; //Unauthorized
-        ctx.response.body={message: 'Username or password incorrect'};
+        ctx.response.body = {message: 'Username or password incorrect'};
+    }
+});
+
+router.post('/logout', authenticateToken, ctx => {
+    const token = ctx.request.headers['authorization'];
+    const username = jwt.decode(token).username;
+
+    const statement = db.prepare('UPDATE Users SET loggedOut = 1 WHERE username = ?');
+    const info = statement.run(username);
+    if (info.changes > 0) {
+        ctx.response.body = {message: "Logged out"};
+        ctx.response.status = 200; //OK
+    } else {
+        ctx.response.body = {message: "Couldn't log out"}
+        ctx.response.status = 400;
     }
 });
 
 router.post('/checkToken', authenticateToken, ctx => {
     ctx.response.status = 200;
-    ctx.response.body = {authenticated: true };
+    ctx.response.body = {authenticated: true};
 });
 
 app.use(router.routes());
