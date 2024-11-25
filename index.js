@@ -76,14 +76,16 @@ const broadcastToUser = (data, username) =>{
 }
 
 class Book {
-    constructor({id, title, author, releaseDate, quantity, isRentable, owner}) {
+    constructor({id, title, author, releaseDate, quantity, isRentable, owner, image = null, location = null}) {
         this.id = id;
         this.title = title;
         this.author = author;
         this.releaseDate = releaseDate;
         this.quantity = quantity;
         this.isRentable = isRentable;
-        this.owner = owner
+        this.owner = owner;
+        this.image = image;
+        this.location = location;
     }
 }
 
@@ -117,11 +119,14 @@ router.get('/books', authenticateToken, ctx => {
     const page = parseInt(ctx.query.page, 10);
     const limit = parseInt(ctx.query.limit, 10);
     const title = ctx.query.title;
-    const titleSearch = `%${title}%`
+    const titleSearch = `%${title}%`;
     const offset = (page - 1) * limit;
     const token = ctx.request.headers['authorization'];
     const username = jwt.decode(token).username;
-    const statement = db.prepare('SELECT * FROM Books WHERE title LIKE ? AND (owner = ? or owner is null) LIMIT ? OFFSET ?');
+
+    const statement = db.prepare(
+        'SELECT * FROM Books WHERE title LIKE ? AND (owner = ? OR owner IS NULL) LIMIT ? OFFSET ?'
+    );
     const books = statement.all(titleSearch, username, limit, offset);
     ctx.response.body = books;
 });
@@ -129,14 +134,16 @@ router.get('/books', authenticateToken, ctx => {
 router.get('/books/:id', authenticateToken, async (ctx) => {
     const token = ctx.request.headers['authorization'];
     const username = jwt.decode(token).username;
-    const bookId = parseInt(ctx.request.ctx.params.id);
-    const statement = db.prepare('SELECT * FROM Books WHERE id = ? AND (owner = ? or owner is null)');
+    const bookId = parseInt(ctx.params.id);
+
+    const statement = db.prepare('SELECT * FROM Books WHERE id = ? AND (owner = ? OR owner IS NULL)');
     const book = statement.get(bookId, username);
-    if (book && (book.owner === username || book.owner === null)) {
+
+    if (book) {
         ctx.response.body = book;
     } else {
-        ctx.response.status(404);
-        ctx.response.body = {error: 'Book doesn\'t exist for this user'};
+        ctx.response.status = 404; // Not Found
+        ctx.response.body = {error: 'Book doesn\'t exist or not authorized'};
     }
 });
 
@@ -163,24 +170,30 @@ router.post('/books', authenticateToken, async (ctx) => {
 
 router.put('/books', authenticateToken, async (ctx) => {
     const newBook = ctx.request.body;
-    const id = newBook.id;
+    const {id, title, releaseDate, quantity, isRentable, author, image, location} = newBook;
     const token = ctx.request.headers['authorization'];
     const username = jwt.decode(token).username;
-    const statement = db.prepare('UPDATE Books SET title = ?, releaseDate = ?, quantity = ?, isRentable = ?, author = ? WHERE id = ? and (owner = ? or owner is null)');
-    const info = statement.run(newBook.title, newBook.releaseDate, newBook.quantity, newBook.isRentable, newBook.author, newBook.id, username);
+
+    const statement = db.prepare(
+        'UPDATE Books SET title = ?, releaseDate = ?, quantity = ?, isRentable = ?, author = ?, image = ?, location = ? ' +
+        'WHERE id = ? AND (owner = ? OR owner IS NULL)'
+    );
+    const info = statement.run(title, releaseDate, quantity, isRentable, author, image || null, location || null, id, username);
+
     if (info.changes > 0) {
         ctx.response.body = newBook;
-        ctx.response.status = 200; //OK
+        ctx.response.status = 200; // OK
     } else {
-        ctx.response.status = 400; //BAD REQUEST
-        ctx.response.body = {error: 'Book doesn\'t exist'};
+        ctx.response.status = 400; // BAD REQUEST
+        ctx.response.body = {error: 'Book doesn\'t exist or not authorized to update'};
     }
+
     const stat = db.prepare('SELECT * FROM Books WHERE id = ?');
     const book = stat.get(id);
-    if(book.owner === null){
+    if (book.owner === null) {
         broadcast({event: 'updated', payload: newBook});
-    }else {
-        broadcastToUser({event: 'updated', payload: newBook},username);
+    } else {
+        broadcastToUser({event: 'updated', payload: newBook}, username);
     }
 });
 
