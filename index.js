@@ -55,6 +55,7 @@ wss.on('connection', (ws) => {
         }
     });
     ws.on('close', () => {
+        console.log("Intrat");
         clientMap.forEach((value, key) => {
             if (value === ws) clientMap.delete(key);
         });
