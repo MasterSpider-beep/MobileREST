@@ -55,7 +55,6 @@ wss.on('connection', (ws) => {
         }
     });
     ws.on('close', () => {
-        console.log("Intrat");
         clientMap.forEach((value, key) => {
             if (value === ws) clientMap.delete(key);
         });
@@ -76,7 +75,7 @@ const broadcastToUser = (data, username) =>{
 }
 
 class Book {
-    constructor({id, title, author, releaseDate, quantity, isRentable, owner, image = null, location = null}) {
+    constructor({id, title, author, releaseDate, quantity, isRentable, owner, image = null, lat = null, long =null}) {
         this.id = id;
         this.title = title;
         this.author = author;
@@ -85,7 +84,8 @@ class Book {
         this.isRentable = isRentable;
         this.owner = owner;
         this.image = image;
-        this.location = location;
+        this.lat = lat;
+        this.long = long;
     }
 }
 
@@ -170,15 +170,14 @@ router.post('/books', authenticateToken, async (ctx) => {
 
 router.put('/books', authenticateToken, async (ctx) => {
     const newBook = ctx.request.body;
-    const {id, title, releaseDate, quantity, isRentable, author, image, location} = newBook;
+    const {id, title, releaseDate, quantity, isRentable, author, image, lat, long} = newBook;
     const token = ctx.request.headers['authorization'];
     const username = jwt.decode(token).username;
-
     const statement = db.prepare(
-        'UPDATE Books SET title = ?, releaseDate = ?, quantity = ?, isRentable = ?, author = ?, image = ?, location = ? ' +
+        'UPDATE Books SET title = ?, releaseDate = ?, quantity = ?, isRentable = ?, author = ?, image = ?, lat = ?, long = ? ' +
         'WHERE id = ? AND (owner = ? OR owner IS NULL)'
     );
-    const info = statement.run(title, releaseDate, quantity, isRentable, author, image || null, location || null, id, username);
+    const info = statement.run(title, releaseDate, quantity, isRentable, author, image || null, lat || null, long ||null, id, username);
 
     if (info.changes > 0) {
         ctx.response.body = newBook;
