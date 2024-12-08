@@ -99,8 +99,10 @@ const authenticateToken = async (ctx, next) => {
     }
 
     try {
-        const user = await jwt.verify(token, JWT_SECRET);
+        console.log("Token: " + token);
+        const user = await jwt.verify(token.split(" ")[1], JWT_SECRET);
         const username = user.username;
+        console.log("Username found: " + username);
         const statement = db.prepare('SELECT loggedOut FROM Users WHERE username = ?');
         const loggedOut = statement.get(username).loggedOut;
         if (loggedOut === 0) {
@@ -116,19 +118,15 @@ const authenticateToken = async (ctx, next) => {
     }
 };
 router.get('/books', authenticateToken, ctx => {
-    const page = parseInt(ctx.query.page, 10);
-    const limit = parseInt(ctx.query.limit, 10);
-    const title = ctx.query.title;
-    const titleSearch = `%${title}%`;
-    const offset = (page - 1) * limit;
-    const token = ctx.request.headers['authorization'];
+    const token = ctx.request.headers['authorization'].split(" ")[1];
     const username = jwt.decode(token).username;
 
     const statement = db.prepare(
-        'SELECT * FROM Books WHERE title LIKE ? AND (owner = ? OR owner IS NULL) LIMIT ? OFFSET ?'
+        'SELECT * FROM Books WHERE (owner = ? OR owner IS NULL)'
     );
-    const books = statement.all(titleSearch, username, limit, offset);
+    const books = statement.all(username);
     ctx.response.body = books;
+    ctx.response.status = 200;
 });
 
 router.get('/books/:id', authenticateToken, async (ctx) => {
@@ -141,6 +139,7 @@ router.get('/books/:id', authenticateToken, async (ctx) => {
 
     if (book) {
         ctx.response.body = book;
+        ctx.response.status = 200;
     } else {
         ctx.response.status = 404; // Not Found
         ctx.response.body = {error: 'Book doesn\'t exist or not authorized'};
