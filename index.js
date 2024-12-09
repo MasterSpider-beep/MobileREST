@@ -130,7 +130,7 @@ router.get('/books', authenticateToken, ctx => {
 });
 
 router.get('/books/:id', authenticateToken, async (ctx) => {
-    const token = ctx.request.headers['authorization'];
+    const token = ctx.request.headers['authorization'].split(" ")[1];
     const username = jwt.decode(token).username;
     const bookId = parseInt(ctx.params.id);
 
@@ -169,8 +169,8 @@ router.post('/books', authenticateToken, async (ctx) => {
 
 router.put('/books', authenticateToken, async (ctx) => {
     const newBook = ctx.request.body;
-    const {id, title, releaseDate, quantity, isRentable, author, image, lat, long} = newBook;
-    const token = ctx.request.headers['authorization'];
+    const {id, title, releaseDate, quantity, isRentable, owner, author, image, lat, long} = newBook;
+    const token = ctx.request.headers['authorization'].split(" ")[1];
     const username = jwt.decode(token).username;
     const statement = db.prepare(
         'UPDATE Books SET title = ?, releaseDate = ?, quantity = ?, isRentable = ?, author = ?, image = ?, lat = ?, long = ? ' +
